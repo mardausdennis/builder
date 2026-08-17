@@ -1,0 +1,66 @@
+name: POT artifact (fork only)
+
+# Runs the same extraction as generate-pot-file.yml, but uploads the result as
+# an artifact instead of pushing anywhere. Used to regenerate main.pot without
+# write access to the upstream repository.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  pot:
+    name: Generate POT file
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Generate POT file
+        run: |
+          set -e
+          cd ~
+          echo "::group::Setting up bench"
+          pip install frappe-bench
+          bench -v init frappe-bench --skip-assets --skip-redis-config-generation --python "$(which python)" --frappe-branch develop
+          echo "::endgroup::"
+
+          cd ./frappe-bench
+          echo "::group::Getting builder"
+          bench get-app --skip-assets builder "${GITHUB_WORKSPACE}"
+          echo "::endgroup::"
+
+          echo "::group::Generating POT file"
+          bench generate-pot-file --app builder
+          echo "::endgroup::"
+
+          POT="$HOME/frappe-bench/apps/builder/builder/locale/main.pot"
+          test -f "$POT"
+          cp "$POT" "${GITHUB_WORKSPACE}/main.pot.generated"
+
+          echo "entries: $(grep -c '^msgid ' "$POT")"
+          echo "bytes:   $(wc -c < "$POT")"
+          sha256sum "$POT"
+
+      - name: Show diff against the committed POT
+        run: |
+          git --no-pager diff --stat --no-index builder/locale/main.pot main.pot.generated || true
+
+      - name: Upload POT
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-pot
+          path: main.pot.generated
+          if-no-files-found: error
